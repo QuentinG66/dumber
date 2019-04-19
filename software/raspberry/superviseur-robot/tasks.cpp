@@ -352,7 +352,8 @@ void Tasks::StartRobotTask(void *arg) {
 void Tasks::MoveTask(void *arg) {
     int rs;
     int cpMove;
-    
+   	int batteryAsk = 0; 
+		MessageBattery * msg;
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
@@ -377,9 +378,17 @@ void Tasks::MoveTask(void *arg) {
             
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
             robot.Write(new Message((MessageID)cpMove));
+		
+						batteryAsk += 1;
+						if (batteryAsk == 5){	
+							cout << endl << "Battery asked";
+							msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
+							WriteInQueue(&q_messageToMon, msg);  // msgSend will be deleted by sendToMon
+							batteryAsk = 0;
+						}
             rt_mutex_release(&mutex_robot);
         }
-        cout << endl << flush;
+				cout << endl << flush;
     }
 }
 
