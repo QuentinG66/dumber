@@ -27,6 +27,18 @@
 #define PRIORITY_TSTARTROBOT 20
 #define PRIORITY_TCAMERA 21
 
+#define PRIORITY_TREFRESHWD 99
+
+#define TIME_REFRESH_WD 1000000000
+
+#define RED "\033[91m"
+#define GREEN "\033[92m"
+#define BLUE "\033[34m"
+#define YELLOW "\033[93m"
+#define LPURPLE "\033[94m"
+#define PURPLE "\033[95m"
+#define RESET "\033[0m"
+
 /*
  * Some remarks:
  * 1- This program is mostly a template. It shows you how to create tasks, semaphore
@@ -73,6 +85,18 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+
+		/**
+		* Our code
+		**/
+
+		if (err = rt_mutex_create(&mutex_watchdog, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+
+
+
     cout << "Mutexes created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -91,6 +115,15 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_sem_create(&sem_startRobot, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+		
+		/**
+		* Our code
+		**/
+
+		if (err = rt_sem_create(&sem_refreshWD, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -123,6 +156,15 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+	
+		/**
+		* Our code
+		**/
+    if (err = rt_task_create(&th_refreshWD, "th_refreshWD", 0, PRIORITY_TREFRESHWD, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+
     cout << "Tasks created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -168,6 +210,11 @@ void Tasks::Run() {
         exit(EXIT_FAILURE);
     }
 
+    if (err = rt_task_start(&th_refreshWD, (void(*)(void*)) & Tasks::RefreshWDTask, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+
     cout << "Tasks launched" << endl << flush;
 }
 
@@ -208,6 +255,7 @@ void Tasks::ServerTask(void *arg) {
 
     if (status < 0) throw std::runtime_error {
         "Unable to start server on port " + std::to_string(SERVER_PORT)
+				// Server can't be launched
     };
     monitor.AcceptClient(); // Wait the monitor client
     cout << "Rock'n'Roll baby, client accepted!" << endl << flush;
@@ -266,6 +314,14 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_sem_v(&sem_openComRobot);
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITHOUT_WD)) {
             rt_sem_v(&sem_startRobot);
+						rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
+						watchdog = false;
+						rt_mutex_release(&mutex_watchdog);
+				}else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITH_WD)){
+            rt_sem_v(&sem_startRobot);	
+						rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
+						watchdog = true;
+						rt_mutex_release(&mutex_watchdog);
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_LEFT) ||
@@ -275,7 +331,9 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_mutex_acquire(&mutex_move, TM_INFINITE);
             move = msgRcv->GetID();
             rt_mutex_release(&mutex_move);
-        }
+        }else{
+					cout << msgRcv->ToString() << endl << flush;
+				}
         delete(msgRcv); // mus be deleted manually, no consumer
     }
 }
@@ -317,6 +375,7 @@ void Tasks::OpenComRobot(void *arg) {
  * @brief Thread starting the communication with the robot.
  */
 void Tasks::StartRobotTask(void *arg) {
+		int free_status=1;
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
@@ -328,9 +387,24 @@ void Tasks::StartRobotTask(void *arg) {
 
         Message * msgSend;
         rt_sem_p(&sem_startRobot, TM_INFINITE);
-        cout << "Start robot without watchdog (";
-        rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-        msgSend = robot.Write(robot.StartWithoutWD());
+				
+        rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
+				rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+				if (watchdog){
+	        cout << "Start robot with watchdog (";
+    	    msgSend = robot.Write(robot.StartWithWD());
+					rt_task_set_periodic(&th_refreshWD, TM_NOW, TIME_REFRESH_WD);
+					free_status = rt_sem_v(&sem_refreshWD);
+					if (free_status !=0){
+						cout << "Error when freeing sem" << endl << flush;
+					}else{
+						cout << "Free is done right" << endl << flush;
+					}
+				}else{
+	        cout << "Start robot without watchdog (";
+    	    msgSend = robot.Write(robot.StartWithoutWD());
+				}
+				rt_mutex_release(&mutex_watchdog);
         rt_mutex_release(&mutex_robot);
         cout << msgSend->GetID();
         cout << ")" << endl;
@@ -381,7 +455,6 @@ void Tasks::MoveTask(void *arg) {
 		
 						batteryAsk += 1;
 						if (batteryAsk == 5){	
-							cout << endl << "Battery asked";
 							msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
 							WriteInQueue(&q_messageToMon, msg);  // msgSend will be deleted by sendToMon
 							batteryAsk = 0;
@@ -392,6 +465,26 @@ void Tasks::MoveTask(void *arg) {
     }
 }
 
+void Tasks::RefreshWDTask(void *arg){
+	int sem_status;
+	Message * wd;
+  cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+
+	while (1){
+		rt_task_wait_period(NULL);
+		if (robotStarted == 1){
+			sem_status = rt_sem_p(&sem_refreshWD, TM_NONBLOCK);
+			if (sem_status !=EWOULDBLOCK){
+				//Todo
+				wd = robot.Write(robot.ReloadWD());	
+				cout << BLUE << "Watchdog : " << wd->ToString() << RESET << endl << flush;
+				rt_sem_v(&sem_refreshWD);
+			}else{
+				cout << RED << "Watchdog not launching " << RESET << endl << flush;
+			}
+		}
+	}
+}
 /**
  * Write a message in a given queue
  * @param queue Queue identifier
