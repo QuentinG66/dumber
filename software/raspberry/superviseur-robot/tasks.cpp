@@ -62,6 +62,15 @@
  * @brief Initialisation des structures de l'application (tâches, mutex, 
  * semaphore, etc.)
  */
+
+
+/** 
+* Function which verify is robot output is Ok !
+* @return True if ok, else False
+*/
+bool isMsgFromRobotNOk(Message * msg){
+	return (msg->CompareID(MESSAGE_ANSWER_COM_ERROR) || msg->CompareID(MESSAGE_ANSWER_ROBOT_TIMEOUT) || msg->CompareID(MESSAGE_ANSWER_ROBOT_UNKNOWN_COMMAND) || msg->CompareID(MESSAGE_ANSWER_COM_ERROR));
+}
 void Tasks::Init() {
     int status;
     int err;
@@ -95,6 +104,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
 
+		if (err = rt_mutex_create(&mutex_robotMsgLost, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
 
 
     cout << "Mutexes created successfully" << endl << flush;
@@ -404,9 +417,23 @@ void Tasks::StartRobotTask(void *arg) {
 	        cout << "Start robot without watchdog (";
     	    msgSend = robot.Write(robot.StartWithoutWD());
 				}
+
+
+				if (isMsgFromRobotNOk(msgSend)){
+					rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+					robotMsgLost += 1;
+					if (not(robotMsgLost < robotMaxMsgLost)){
+						cout << RED << "Error msg robot" << RESET << endl << flush;
+					}
+				}else{
+					rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+					robotMsgLost = 0;
+					rt_mutex_release(&mutex_robotMsgLost);
+				}
+
 				rt_mutex_release(&mutex_watchdog);
         rt_mutex_release(&mutex_robot);
-        cout << msgSend->GetID();
+        cout << msgSend->ToString();
         cout << ")" << endl;
 
         cout << "Movement answer: " << msgSend->ToString() << endl << flush;
@@ -444,6 +471,7 @@ void Tasks::MoveTask(void *arg) {
         rs = robotStarted;
         rt_mutex_release(&mutex_robotStarted);
         if (rs == 1) {
+						Message * fromRobot;
             rt_mutex_acquire(&mutex_move, TM_INFINITE);
             cpMove = move;
             rt_mutex_release(&mutex_move);
@@ -451,11 +479,37 @@ void Tasks::MoveTask(void *arg) {
             cout << " move: " << cpMove;
             
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-            robot.Write(new Message((MessageID)cpMove));
-		
+            fromRobot = robot.Write(new Message((MessageID)cpMove));
+
+						if (isMsgFromRobotNOk(fromRobot)){
+							rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+							robotMsgLost += 1;
+							if (not(robotMsgLost < robotMaxMsgLost)){
+								cout << RED << "Error msg robot" << RESET << endl << flush;
+							}
+						}else{
+							rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+							robotMsgLost = 0;
+							rt_mutex_release(&mutex_robotMsgLost);
+						}
+						delete(fromRobot);
+
 						batteryAsk += 1;
 						if (batteryAsk == 5){	
 							msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
+							if (isMsgFromRobotNOk(msg)){
+								//Todo
+								rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+								robotMsgLost += 1;
+								if (not(robotMsgLost < robotMaxMsgLost)){
+									cout << RED << "Error msg robot" << RESET << endl << flush;
+								}
+							}else{
+								rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+								robotMsgLost = 0;
+								rt_mutex_release(&mutex_robotMsgLost);
+							}
+
 							WriteInQueue(&q_messageToMon, msg);  // msgSend will be deleted by sendToMon
 							batteryAsk = 0;
 						}
@@ -467,7 +521,6 @@ void Tasks::MoveTask(void *arg) {
 
 void Tasks::RefreshWDTask(void *arg){
 	int sem_status;
-	Message * wd;
   cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
 
 	while (1){
@@ -475,10 +528,10 @@ void Tasks::RefreshWDTask(void *arg){
 		if (robotStarted == 1){
 			sem_status = rt_sem_p(&sem_refreshWD, TM_NONBLOCK);
 			if (sem_status !=EWOULDBLOCK){
-				//Todo
-				wd = robot.Write(robot.ReloadWD());	
+				Message * wd = robot.Write(robot.ReloadWD());	
 				cout << BLUE << "Watchdog : " << wd->ToString() << RESET << endl << flush;
 				rt_sem_v(&sem_refreshWD);
+				delete(wd);
 			}else{
 				cout << RED << "Watchdog not launching " << RESET << endl << flush;
 			}

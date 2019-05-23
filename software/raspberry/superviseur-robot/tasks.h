@@ -67,6 +67,8 @@ private:
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
 
+		int robotMsgLost = 0;
+		int robotMaxMsgLost = 3;
     bool watchdog = false;
 
     /**********************************************************************/
@@ -90,7 +92,7 @@ private:
     RT_MUTEX mutex_move;
 
 		RT_MUTEX mutex_watchdog;
-
+		RT_MUTEX mutex_robotMsgLost;
     /**********************************************************************/
     /* Semaphores                                                         */
     /**********************************************************************/
