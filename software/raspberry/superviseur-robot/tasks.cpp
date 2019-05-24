@@ -136,10 +136,6 @@ void Tasks::Init() {
 		* Our code
 		**/
 
-		if (err = rt_sem_create(&sem_refreshWD, NULL, 0, S_FIFO)) {
-        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
     cout << "Semaphores created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -223,11 +219,7 @@ void Tasks::Run() {
         exit(EXIT_FAILURE);
     }
 
-    if (err = rt_task_start(&th_refreshWD, (void(*)(void*)) & Tasks::RefreshWDTask, this)) {
-        cerr << "Error task start: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-
+    
     cout << "Tasks launched" << endl << flush;
 }
 
@@ -291,9 +283,8 @@ void Tasks::SendToMonTask(void* arg) {
     rt_sem_p(&sem_serverOk, TM_INFINITE);
 
     while (1) {
-        cout << "wait msg to send" << endl << flush;
         msg = ReadInQueue(&q_messageToMon);
-        cout << "Send msg to mon: " << msg->ToString() << endl << flush;
+        cout << YELLOW << "[#Monitor] " << RESET << "Send msg to mon: " << msg->ToString() << endl << flush;
         rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
         monitor.Write(msg); // The message is deleted with the Write
         rt_mutex_release(&mutex_monitor);
@@ -388,7 +379,7 @@ void Tasks::OpenComRobot(void *arg) {
  * @brief Thread starting the communication with the robot.
  */
 void Tasks::StartRobotTask(void *arg) {
-		int free_status=1;
+    int err;
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
@@ -406,24 +397,22 @@ void Tasks::StartRobotTask(void *arg) {
 				if (watchdog){
 	        cout << "Start robot with watchdog (";
     	    msgSend = robot.Write(robot.StartWithWD());
-					rt_task_set_periodic(&th_refreshWD, TM_NOW, TIME_REFRESH_WD);
-					free_status = rt_sem_v(&sem_refreshWD);
-					if (free_status !=0){
-						cout << "Error when freeing sem" << endl << flush;
-					}else{
-						cout << "Free is done right" << endl << flush;
-					}
+					/**Start refresh wd **/
+					if (err = rt_task_start(&th_refreshWD, (void(*)(void*)) & Tasks::RefreshWDTask, this)) {
+		        cerr << "Error task start: " << strerror(-err) << endl << flush;
+    		    exit(EXIT_FAILURE);
+			    }
 				}else{
 	        cout << "Start robot without watchdog (";
     	    msgSend = robot.Write(robot.StartWithoutWD());
 				}
-
 
 				if (isMsgFromRobotNOk(msgSend)){
 					rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
 					robotMsgLost += 1;
 					if (not(robotMsgLost < robotMaxMsgLost)){
 						cout << RED << "Error msg robot" << RESET << endl << flush;
+						robot.Close();
 					}
 				}else{
 					rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
@@ -486,6 +475,7 @@ void Tasks::MoveTask(void *arg) {
 							robotMsgLost += 1;
 							if (not(robotMsgLost < robotMaxMsgLost)){
 								cout << RED << "Error msg robot" << RESET << endl << flush;
+								robot.Close();
 							}
 						}else{
 							rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
@@ -503,6 +493,7 @@ void Tasks::MoveTask(void *arg) {
 								robotMsgLost += 1;
 								if (not(robotMsgLost < robotMaxMsgLost)){
 									cout << RED << "Error msg robot" << RESET << endl << flush;
+									robot.Close();
 								}
 							}else{
 								rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
@@ -523,18 +514,14 @@ void Tasks::RefreshWDTask(void *arg){
 	int sem_status;
   cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
 
+	rt_task_set_periodic(NULL, TM_NOW, TIME_REFRESH_WD);
 	while (1){
 		rt_task_wait_period(NULL);
 		if (robotStarted == 1){
-			sem_status = rt_sem_p(&sem_refreshWD, TM_NONBLOCK);
-			if (sem_status !=EWOULDBLOCK){
-				Message * wd = robot.Write(robot.ReloadWD());	
-				cout << BLUE << "Watchdog : " << wd->ToString() << RESET << endl << flush;
-				rt_sem_v(&sem_refreshWD);
-				delete(wd);
-			}else{
-				cout << RED << "Watchdog not launching " << RESET << endl << flush;
-			}
+			cout << YELLOW << robot.ReloadWD()->ToString() << RESET << endl << flush;
+			Message * wd = robot.Write(robot.ReloadWD());	
+			cout << BLUE << "Watchdog : " << wd->ToString() << RESET << endl << flush;
+			delete(wd);
 		}
 	}
 }
@@ -569,4 +556,5 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
 
     return msg;
 }
+
 

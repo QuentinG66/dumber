@@ -93,15 +93,21 @@ private:
 
 		RT_MUTEX mutex_watchdog;
 		RT_MUTEX mutex_robotMsgLost;
+		
+		RT_MUTEX mutex_cameraActive;
+		RT_MUTEX mutex_dessinArene;
+		RT_MUTEX mutex_calculPosition;
+
     /**********************************************************************/
     /* Semaphores                                                         */
     /**********************************************************************/
+
     RT_SEM sem_barrier;
     RT_SEM sem_openComRobot;
     RT_SEM sem_serverOk;
     RT_SEM sem_startRobot;
 		
-		RT_SEM sem_refreshWD;
+		//RT_SEM sem_refreshWD;
 
     /**********************************************************************/
     /* Message queues                                                     */
