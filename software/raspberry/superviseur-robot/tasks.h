@@ -37,138 +37,163 @@
 using namespace std;
 
 class Tasks {
-public:
-    /**
-     * @brief Initializes main structures (semaphores, tasks, mutex, etc.)
-     */
-    void Init();
+	public:
+		/**
+		 * @brief Initializes main structures (semaphores, tasks, mutex, etc.)
+		 */
+		void Init();
 
-    /**
-     * @brief Starts tasks
-     */
-    void Run();
+		/**
+		 * @brief Starts tasks
+		 */
+		void Run();
 
-    /**
-     * @brief Stops tasks
-     */
-    void Stop();
-    
-    /**
-     * @brief Suspends main thread
-     */
-    void Join();
-    
-private:
-    /**********************************************************************/
-    /* Shared data                                                        */
-    /**********************************************************************/
-    ComMonitor monitor;
-    ComRobot robot;
-    int robotStarted = 0;
-    int move = MESSAGE_ROBOT_STOP;
+		/**
+		 * @brief Stops tasks
+		 */
+		void Stop();
+
+		/**
+		 * @brief Suspends main thread
+		 */
+		void Join();
+
+	private:
+		/**********************************************************************/
+		/* Shared data                                                        */
+		/**********************************************************************/
+		ComMonitor monitor;
+		ComRobot robot;
+		Camera camera;
+		int robotStarted = 0;
+		int move = MESSAGE_ROBOT_STOP;
 
 		int robotMsgLost = 0;
 		int robotMaxMsgLost = 3;
-    bool watchdog = false;
+		bool watchdog = false;
 
-    /**********************************************************************/
-    /* Tasks                                                              */
-    /**********************************************************************/
-    RT_TASK th_server;
-    RT_TASK th_sendToMon;
-    RT_TASK th_receiveFromMon;
-    RT_TASK th_openComRobot;
-    RT_TASK th_startRobot;
-    RT_TASK th_move;
+		bool cameraActive = false;
+		bool calculPosition = false;
+		bool dessinArene = false;
+
+		int msgCamera = MESSAGE_CAM_CLOSE;
+
+		/**********************************************************************/
+		/* Tasks                                                              */
+		/**********************************************************************/
+		RT_TASK th_server;
+		RT_TASK th_sendToMon;
+		RT_TASK th_receiveFromMon;
+		RT_TASK th_openComRobot;
+		RT_TASK th_startRobot;
+		RT_TASK th_move;
+
 
 		RT_TASK th_refreshWD;
-    
-    /**********************************************************************/
-    /* Mutex                                                              */
-    /**********************************************************************/
-    RT_MUTEX mutex_monitor;
-    RT_MUTEX mutex_robot;
-    RT_MUTEX mutex_robotStarted;
-    RT_MUTEX mutex_move;
 
+		RT_TASK th_requestCam;
+		RT_TASK th_periodicCam;
+		/**********************************************************************/
+		/* Mutex                                                              */
+		/**********************************************************************/
+		RT_MUTEX mutex_monitor;
+		RT_MUTEX mutex_robot;
+		RT_MUTEX mutex_robotStarted;
+		RT_MUTEX mutex_move;
+		RT_MUTEX mutex_camera;
+		
 		RT_MUTEX mutex_watchdog;
 		RT_MUTEX mutex_robotMsgLost;
-		
+
+
+		RT_MUTEX mutex_msgCamera;
 		RT_MUTEX mutex_cameraActive;
 		RT_MUTEX mutex_dessinArene;
 		RT_MUTEX mutex_calculPosition;
 
-    /**********************************************************************/
-    /* Semaphores                                                         */
-    /**********************************************************************/
+		/**********************************************************************/
+		/* Semaphores                                                         */
+		/**********************************************************************/
 
-    RT_SEM sem_barrier;
-    RT_SEM sem_openComRobot;
-    RT_SEM sem_serverOk;
-    RT_SEM sem_startRobot;
-		
-		//RT_SEM sem_refreshWD;
+		RT_SEM sem_barrier;
+		RT_SEM sem_openComRobot;
+		RT_SEM sem_serverOk;
+		RT_SEM sem_startRobot;
+		RT_SEM sem_camera;
 
-    /**********************************************************************/
-    /* Message queues                                                     */
-    /**********************************************************************/
-    int MSG_QUEUE_SIZE;
-    RT_QUEUE q_messageToMon;
-    
-    /**********************************************************************/
-    /* Tasks' functions                                                   */
-    /**********************************************************************/
-    /**
-     * @brief Thread handling server communication with the monitor.
-     */
-    void ServerTask(void *arg);
-     
-    /**
-     * @brief Thread sending data to monitor.
-     */
-    void SendToMonTask(void *arg);
-        
-    /**
-     * @brief Thread receiving data from monitor.
-     */
-    void ReceiveFromMonTask(void *arg);
-    
-    /**
-     * @brief Thread opening communication with the robot.
-     */
-    void OpenComRobot(void *arg);
+		/**********************************************************************/
+		/* Message queues                                                     */
+		/**********************************************************************/
+		int MSG_QUEUE_SIZE;
+		RT_QUEUE q_messageToMon;
 
-    /**
-     * @brief Thread starting the communication with the robot.
-     */
-    void StartRobotTask(void *arg);
-    
-    /**
-     * @brief Thread handling control of the robot.
-     */
-    void MoveTask(void *arg);
-   	
+		/**********************************************************************/
+		/* Tasks' functions                                                   */
+		/**********************************************************************/
 		/**
-		* @brief Refresh WD
-		*/
+		 * @brief Thread handling server communication with the monitor.
+		 */
+		void ServerTask(void *arg);
+
+		/**
+		 * @brief Thread sending data to monitor.
+		 */
+		void SendToMonTask(void *arg);
+
+		/**
+		 * @brief Thread receiving data from monitor.
+		 */
+		void ReceiveFromMonTask(void *arg);
+
+		/**
+		 * @brief Thread opening communication with the robot.
+		 */
+		void OpenComRobot(void *arg);
+
+		/**
+		 * @brief Thread starting the communication with the robot.
+		 */
+		void StartRobotTask(void *arg);
+
+		/**
+		 * @brief Thread handling control of the robot.
+		 */
+		void MoveTask(void *arg);
+
+
+		/********** OUR Code *********/
+		/**
+		 * @brief Refresh WD
+		 */
 		void RefreshWDTask(void *arg);
 
-    /**********************************************************************/
-    /* Queue services                                                     */
-    /**********************************************************************/
-    /**
-     * Write a message in a given queue
-     * @param queue Queue identifier
-     * @param msg Message to be stored
-     */
-    void WriteInQueue(RT_QUEUE *queue, Message *msg);
-    
-    /**
-     * Read a message from a given queue, block if empty
-     * @param queue Queue identifier
-     * @return Message read
-     */
-    Message *ReadInQueue(RT_QUEUE *queue);
+		/**
+		 * @brief camera request
+		 **/
+		void CameraRequest(void * arg);
+		
+		/**
+		*
+		*
+		**/
+		void CameraPeriodic(void * arg);
+
+		/**********************************************************************/
+		/* Queue services                                                     */
+		/**********************************************************************/
+		/**
+		 * Write a message in a given queue
+		 * @param queue Queue identifier
+		 * @param msg Message to be stored
+		 */
+		void WriteInQueue(RT_QUEUE *queue, Message *msg);
+
+		/**
+		 * Read a message from a given queue, block if empty
+		 * @param queue Queue identifier
+		 * @return Message read
+		 */
+		Message *ReadInQueue(RT_QUEUE *queue);
 
 };
 
