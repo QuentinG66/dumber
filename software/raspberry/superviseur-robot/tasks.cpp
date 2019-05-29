@@ -729,6 +729,9 @@ void Tasks::CameraPeriodic(void * args){
 						rt_mutex_release(&mutex_dessinArene);
 					}else{
 						actualState = askArena;
+						rt_mutex_acquire(&mutex_dessinArene, TM_INFINITE);
+						dessinArene = false;
+						rt_mutex_release(&mutex_dessinArene);
 					}
 					rt_mutex_release(&mutex_areneOk);
 				}
