@@ -133,6 +133,15 @@ void Tasks::Init() {
 		cerr << "Error mutex create: " << strerror(-err) << endl << flush;
 		exit(EXIT_FAILURE);
 	}
+	if (err = rt_mutex_create(&mutex_areneOk, NULL)) {
+		cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+		exit(EXIT_FAILURE);
+	}
+
+	if (err = rt_mutex_create(&mutex_arena, NULL)) {
+		cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+		exit(EXIT_FAILURE);
+	}
 
 	cout << "Mutexes created successfully" << endl << flush;
 
@@ -224,6 +233,11 @@ void Tasks::Init() {
 		cerr << "Error msg queue create: " << strerror(-err) << endl << flush;
 		exit(EXIT_FAILURE);
 	}
+	if ((err = rt_queue_create(&q_msgCamera, "q_msgCamera", sizeof (Message*)*50, Q_UNLIMITED, Q_FIFO)) < 0) {
+		cerr << "Error msg queue create: " << strerror(-err) << endl << flush;
+		exit(EXIT_FAILURE);
+	}
+
 	cout << "Queues created successfully" << endl << flush;
 
 }
@@ -393,7 +407,7 @@ void Tasks::ReceiveFromMonTask(void *arg) {
 							msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START) ||
 							msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_STOP)){
 			rt_mutex_acquire(&mutex_msgCamera, TM_INFINITE);
-			msgCamera = msgRcv->GetID();
+			WriteInQueue(&q_msgCamera, msgRcv);
 			rt_mutex_release(&mutex_msgCamera);
 		}else{
 			cout << msgRcv->ToString() << endl << flush;
@@ -465,7 +479,7 @@ void Tasks::StartRobotTask(void *arg) {
 			msgSend = robot.Write(robot.StartWithoutWD());
 		}
 
-		if (isMsgFromRobotNOk(msgSend)){
+/*		if (isMsgFromRobotNOk(msgSend)){
 			rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
 			robotMsgLost += 1;
 			if (not(robotMsgLost < robotMaxMsgLost)){
@@ -476,7 +490,7 @@ void Tasks::StartRobotTask(void *arg) {
 			rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
 			robotMsgLost = 0;
 			rt_mutex_release(&mutex_robotMsgLost);
-		}
+		}*/
 
 		rt_mutex_release(&mutex_watchdog);
 		rt_mutex_release(&mutex_robot);
@@ -527,7 +541,7 @@ void Tasks::MoveTask(void *arg) {
 
 			cout << YELLOW << "[#Monitor] : " << RESET << "Periodic move : " << cpMove << endl << flush;
 
-			if (isMsgFromRobotNOk(fromRobot)){
+			/*if (isMsgFromRobotNOk(fromRobot)){
 				rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
 				robotMsgLost += 1;
 				if (not(robotMsgLost < robotMaxMsgLost)){
@@ -538,13 +552,13 @@ void Tasks::MoveTask(void *arg) {
 				rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
 				robotMsgLost = 0;
 				rt_mutex_release(&mutex_robotMsgLost);
-			}
+			}*/
 			delete(fromRobot);
-
+/*
 			batteryAsk += 1;
 			if (batteryAsk == 5){	 
 				msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
-				if (isMsgFromRobotNOk(msg)){
+			*	if (isMsgFromRobotNOk(msg)){
 					rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
 					robotMsgLost += 1;
 					if (not(robotMsgLost < robotMaxMsgLost)){
@@ -559,7 +573,7 @@ void Tasks::MoveTask(void *arg) {
 
 				WriteInQueue(&q_messageToMon, msg);  // msgSend will be deleted by sendToMon
 				batteryAsk = 0;
-			}
+			}*/
 			rt_mutex_release(&mutex_robot);
 		}
 	}
@@ -568,6 +582,7 @@ void Tasks::MoveTask(void *arg) {
 void Tasks::RefreshWDTask(void *arg){
 	int sem_status;
 	int rs;
+	Message * wd;
 	cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
 
 	rt_task_set_periodic(NULL, TM_NOW, TIME_REFRESH_WD);
@@ -577,10 +592,11 @@ void Tasks::RefreshWDTask(void *arg){
 		rs = robotStarted;
 		rt_mutex_release(&mutex_robotStarted);
 		if (rs == 1){
-			Message * wd = robot.Write(robot.ReloadWD());	
-			cout << BLUE << "[#Robot] :" << RESET << "Watchdog : " << wd->ToString() << RESET << endl << flush;
-			delete(wd);
+			robot.Write(robot.ReloadWD());	
 		}
+/*			cout << BLUE << "[#Robot] :" << RESET << "Watchdog : " << wd->ToString() << RESET << endl << flush;
+			//delete(wd);
+		}*/
 	}
 }
 /**
@@ -600,42 +616,64 @@ void Tasks::WriteInQueue(RT_QUEUE *queue, Message *msg) {
 void Tasks::CameraRequest(void * args){
 	int rs = 1;
 	int cpMsgCamera;
-	Message * cachedMessage = new Message((MessageID)MESSAGE_CAM_CLOSE);
+	Message * cachedMessage ;
 
 	cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
 	// Synchronization barrier (waiting that all tasks are starting)
 	rt_sem_p(&sem_barrier, TM_INFINITE);
 
 	while (1){
-		//TODO
-		rt_mutex_acquire(&mutex_msgCamera, TM_INFINITE);
-		cpMsgCamera = msgCamera;
-		rt_mutex_acquire(&mutex_msgCamera);
-
+		cachedMessage = ReadInQueue(&q_msgCamera);
+		
 		rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-		Message * received= new Message((MessageID)msgCamera);
-		if (not(received->CompareID(cachedMessage->GetID()))){
-			cachedMessage = received;
-			if (cachedMessage->CompareID(MESSAGE_CAM_OPEN)){
-				rt_mutex_acquire(&mutex_cameraActive, TM_INFINITE);
-				cameraActive = camera.Open();
-				rt_mutex_release(&mutex_cameraActive);
-			}else if (cachedMessage->CompareID(MESSAGE_CAM_CLOSE)){
-				rt_mutex_acquire(&mutex_cameraActive, TM_INFINITE);
-				cameraActive = false;
-				camera.Close();
-				rt_mutex_release(&mutex_cameraActive);
-			}else {
-				cout << BLUE << "[#Camera] " << RESET << "Request received not handle " << received->ToString() << endl << flush;
-			}
+		if (cachedMessage->CompareID(MESSAGE_CAM_OPEN)){
+			rt_mutex_acquire(&mutex_cameraActive, TM_INFINITE);
+			cameraActive = camera.Open();
+			rt_mutex_release(&mutex_cameraActive);
+		}else if (cachedMessage->CompareID(MESSAGE_CAM_CLOSE)){
+			rt_mutex_acquire(&mutex_cameraActive, TM_INFINITE);
+			cameraActive = false;
+			camera.Close();
+			rt_mutex_release(&mutex_cameraActive);
+		}else if (cachedMessage->CompareID(MESSAGE_CAM_ASK_ARENA)){
+			rt_mutex_acquire(&mutex_dessinArene, TM_INFINITE);
+			dessinArene = true;
+			rt_mutex_release(&mutex_dessinArene);
+			cout << RED << "[#Arena] dessins : " RESET << dessinArene << endl << flush;
+		}else if (cachedMessage->CompareID(MESSAGE_CAM_ARENA_CONFIRM)){
+			rt_mutex_acquire(&mutex_areneOk, TM_INFINITE);
+			areneOk = true;
+			rt_mutex_release(&mutex_areneOk);
+		}else if (cachedMessage->CompareID(MESSAGE_CAM_ARENA_INFIRM)){
+			rt_mutex_acquire(&mutex_areneOk, TM_INFINITE);
+			areneOk = false;
+			rt_mutex_release(&mutex_areneOk);
+		}else if (cachedMessage->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)){
+			rt_mutex_acquire(&mutex_calculPosition , TM_INFINITE);
+			calculPosition = true;
+			rt_mutex_release(&mutex_calculPosition);
+		}else if(cachedMessage->CompareID(MESSAGE_CAM_POSITION_COMPUTE_STOP)){
+			rt_mutex_acquire(&mutex_calculPosition , TM_INFINITE);
+			calculPosition = false;
+			rt_mutex_release(&mutex_calculPosition);
+		}else {
+			cout << BLUE << "[#Camera] " << RESET << "Request received not handle " << cachedMessage->ToString() << endl << flush;
 		}
-		rt_mutex_release(&mutex_camera);
+		
+	rt_mutex_release(&mutex_camera);
 	}
 }
 
 
 void Tasks::CameraPeriodic(void * args){
 	bool cpCameraActive = false;
+	bool cpCalculPosition = false;
+	bool cpDessinArene = false;
+
+	enum State { askArena, awaitConfirm };
+	State actualState = askArena;
+
+	Arena arene;
 	cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
 	// Synchronization barrier (waiting that all tasks are starting)
 	rt_sem_p(&sem_barrier, TM_INFINITE);
@@ -651,16 +689,73 @@ void Tasks::CameraPeriodic(void * args){
 		cpCameraActive = cameraActive;
 		rt_mutex_release(&mutex_cameraActive);
 
+		rt_mutex_acquire(&mutex_calculPosition, TM_INFINITE);
+		cpCalculPosition = calculPosition;
+		rt_mutex_release(&mutex_calculPosition);
+		
+		rt_mutex_acquire(&mutex_dessinArene, TM_INFINITE);
+		cpDessinArene = dessinArene;
+		rt_mutex_release(&mutex_dessinArene);
+
 		if (camera.IsOpen()){
-			if (cameraActive){
+			
+			if (cpCameraActive && not(cpDessinArene) && not(cpCalculPosition) ){
 				Message * tosend= new MessageImg(MESSAGE_CAM_IMAGE,camera.Grab().Copy());
 				WriteInQueue(&q_messageToMon, tosend);  // toSend will be deleted by sendToMon
+			}
+
+			if (cpDessinArene){
+				// Dessiner arène
+				if (actualState == askArena){
+					Img * img = camera.Grab().Copy();
+					arene = img->SearchArena();
+						
+					if (not(arene.IsEmpty())){
+						img->DrawArena(arene);
+						Message * tosend= new MessageImg(MESSAGE_CAM_IMAGE,img);
+						WriteInQueue(&q_messageToMon, tosend);  // toSend will be deleted by sendToMon
+					}
+					actualState = awaitConfirm;
+				}
+				if (actualState == awaitConfirm){
+					rt_mutex_acquire(&mutex_areneOk , TM_INFINITE);
+					if (areneOk){
+						rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+						arena = arene ;
+						rt_mutex_release(&mutex_arena);
+						
+						rt_mutex_acquire(&mutex_dessinArene, TM_INFINITE);
+						dessinArene = false;
+						rt_mutex_release(&mutex_dessinArene);
+					}else{
+						actualState = askArena;
+					}
+					rt_mutex_release(&mutex_areneOk);
+				}
+			}
+
+			if (cpCalculPosition){
+				Img * img = camera.Grab().Copy();
+				rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+				arene = arena;
+				rt_mutex_release(&mutex_arena);
+				list<Position> listPos = img->SearchRobot(arene);
+				img->DrawAllRobots(listPos);
+				WriteInQueue(&q_messageToMon, new MessageImg(MESSAGE_CAM_IMAGE,img));
+				
+				if (!listPos.empty()){
+					for (Position pos : listPos ){
+						WriteInQueue(&q_messageToMon, new MessagePosition(MESSAGE_CAM_POSITION,pos));
+					}
+				}
 			}
 		}
 	
 		rt_mutex_release(&mutex_camera);
 	}
 }
+
+
 /**
  * Read a message from a given queue, block if empty
  * @param queue Queue identifier

@@ -65,6 +65,8 @@ class Tasks {
 		ComMonitor monitor;
 		ComRobot robot;
 		Camera camera;
+		Arena arena;
+
 		int robotStarted = 0;
 		int move = MESSAGE_ROBOT_STOP;
 
@@ -75,8 +77,7 @@ class Tasks {
 		bool cameraActive = false;
 		bool calculPosition = false;
 		bool dessinArene = false;
-
-		int msgCamera = MESSAGE_CAM_CLOSE;
+		bool areneOk = false;		
 
 		/**********************************************************************/
 		/* Tasks                                                              */
@@ -110,6 +111,8 @@ class Tasks {
 		RT_MUTEX mutex_cameraActive;
 		RT_MUTEX mutex_dessinArene;
 		RT_MUTEX mutex_calculPosition;
+		RT_MUTEX mutex_areneOk;
+		RT_MUTEX mutex_arena;
 
 		/**********************************************************************/
 		/* Semaphores                                                         */
@@ -126,6 +129,7 @@ class Tasks {
 		/**********************************************************************/
 		int MSG_QUEUE_SIZE;
 		RT_QUEUE q_messageToMon;
+		RT_QUEUE q_msgCamera;
 
 		/**********************************************************************/
 		/* Tasks' functions                                                   */
