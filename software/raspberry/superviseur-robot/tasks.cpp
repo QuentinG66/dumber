@@ -31,6 +31,7 @@
 #define TIME_REFRESH_WD 1000000000
 #define TIME_PERIOD_CAMERA 100000000
 
+#define ROBOT_MAX_MSG_LOST 3
 
 #define RED "\033[91m"
 #define GREEN "\033[92m"
@@ -39,6 +40,7 @@
 #define LPURPLE "\033[94m"
 #define PURPLE "\033[95m"
 #define RESET "\033[0m"
+
 
 /*
  * Some remarks:
@@ -64,13 +66,6 @@
  * semaphore, etc.)
  */
 
-/** 
- * Function which verify is robot output is Ok !
- * @return True if ok, else False
- */
-bool isMsgFromRobotNOk(Message * msg){
-	return (msg->CompareID(MESSAGE_ANSWER_COM_ERROR) || msg->CompareID(MESSAGE_ANSWER_ROBOT_TIMEOUT) || msg->CompareID(MESSAGE_ANSWER_ROBOT_UNKNOWN_COMMAND) || msg->CompareID(MESSAGE_ANSWER_COM_ERROR));
-}
 
 void Tasks::Init() {
 //	cameraActive = false;
@@ -293,6 +288,7 @@ void Tasks::Run() {
 void Tasks::Stop() {
 	monitor.Close();
 	robot.Close();
+	camera.Close();
 }
 
 /**
@@ -479,25 +475,13 @@ void Tasks::StartRobotTask(void *arg) {
 			msgSend = robot.Write(robot.StartWithoutWD());
 		}
 
-/*		if (isMsgFromRobotNOk(msgSend)){
-			rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
-			robotMsgLost += 1;
-			if (not(robotMsgLost < robotMaxMsgLost)){
-				cout << RED << "[#Robot] " << RESET << "Error msg robot" << RESET << endl << flush;
-				robot.Close();
-			}
-		}else{
-			rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
-			robotMsgLost = 0;
-			rt_mutex_release(&mutex_robotMsgLost);
-		}*/
+		HandleRobotCom(msgSend, false);
 
 		rt_mutex_release(&mutex_watchdog);
 		rt_mutex_release(&mutex_robot);
 		cout << msgSend->ToString();
 		cout << ")" << endl << flush;
 
-//		cout << "Movement answer: " << msgSend->ToString() << endl << flush;
 		WriteInQueue(&q_messageToMon, msgSend);  // msgSend will be deleted by sendToMon
 
 		if (msgSend->GetID() == MESSAGE_ANSWER_ACK) {
@@ -541,39 +525,16 @@ void Tasks::MoveTask(void *arg) {
 
 			cout << YELLOW << "[#Monitor] : " << RESET << "Periodic move : " << cpMove << endl << flush;
 
-			/*if (isMsgFromRobotNOk(fromRobot)){
-				rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
-				robotMsgLost += 1;
-				if (not(robotMsgLost < robotMaxMsgLost)){
-					cout << RED << "[#Robot] " << RESET << "Error msg robot" << RESET << endl << flush;
-					robot.Close();
-				}
-			}else{
-				rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
-				robotMsgLost = 0;
-				rt_mutex_release(&mutex_robotMsgLost);
-			}*/
-			delete(fromRobot);
-/*
+			// Function will delete msg
+			HandleRobotCom(fromRobot, true);		
+	
 			batteryAsk += 1;
 			if (batteryAsk == 5){	 
 				msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
-			*	if (isMsgFromRobotNOk(msg)){
-					rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
-					robotMsgLost += 1;
-					if (not(robotMsgLost < robotMaxMsgLost)){
-						cout << RED << "[#Robot] " << RESET << "Error msg robot" << RESET << endl << flush;
-						robot.Close();
-					}
-				}else{
-					rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
-					robotMsgLost = 0;
-					rt_mutex_release(&mutex_robotMsgLost);
-				}
-
+				HandleRobotCom(msg, false);
 				WriteInQueue(&q_messageToMon, msg);  // msgSend will be deleted by sendToMon
 				batteryAsk = 0;
-			}*/
+			}
 			rt_mutex_release(&mutex_robot);
 		}
 	}
@@ -582,7 +543,6 @@ void Tasks::MoveTask(void *arg) {
 void Tasks::RefreshWDTask(void *arg){
 	int sem_status;
 	int rs;
-	Message * wd;
 	cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
 
 	rt_task_set_periodic(NULL, TM_NOW, TIME_REFRESH_WD);
@@ -592,11 +552,9 @@ void Tasks::RefreshWDTask(void *arg){
 		rs = robotStarted;
 		rt_mutex_release(&mutex_robotStarted);
 		if (rs == 1){
-			robot.Write(robot.ReloadWD());	
+			Message * wd = robot.Write(robot.ReloadWD());
+			HandleRobotCom(wd, true); // Delete it after
 		}
-/*			cout << BLUE << "[#Robot] :" << RESET << "Watchdog : " << wd->ToString() << RESET << endl << flush;
-			//delete(wd);
-		}*/
 	}
 }
 /**
@@ -639,7 +597,6 @@ void Tasks::CameraRequest(void * args){
 			rt_mutex_acquire(&mutex_dessinArene, TM_INFINITE);
 			dessinArene = true;
 			rt_mutex_release(&mutex_dessinArene);
-			cout << RED << "[#Arena] dessins : " RESET << dessinArene << endl << flush;
 		}else if (cachedMessage->CompareID(MESSAGE_CAM_ARENA_CONFIRM)){
 			rt_mutex_acquire(&mutex_areneOk, TM_INFINITE);
 			areneOk = true;
@@ -778,4 +735,36 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
 	return msg;
 }
 
-
+/** 
+ * Function which verify is robot output is Ok !
+ * @return True if ok, else False
+ */
+bool Tasks::isMsgFromRobotNOk(Message * msg){
+	return (msg->CompareID(MESSAGE_ANSWER_COM_ERROR) || msg->CompareID(MESSAGE_ANSWER_ROBOT_TIMEOUT) || msg->CompareID(MESSAGE_ANSWER_ROBOT_UNKNOWN_COMMAND) || msg->CompareID(MESSAGE_ANSWER_COM_ERROR));
+}
+/**
+* Handle return of a message from Robot.
+* If we miss it 3 times in a row. Close communication with Robot
+* When 2nd argument is true, delete the message.
+*/ 
+void Tasks::HandleRobotCom(Message * fromRobot, bool deleteIt){
+	if (isMsgFromRobotNOk(fromRobot)){
+		rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+		robotMsgLost += 1;
+		if (not(robotMsgLost < ROBOT_MAX_MSG_LOST)){
+			cout << RED << "[#Robot] " << RESET << "Error msg robot" << RESET << endl << flush;
+			robot.Close();
+			// Msg to send to the monitor
+			// Missing the msg, should we create it ?
+			//Message * tosend = new Message();
+			//WriteInQueue(&q_messageToMon, tosend);  // toSend will be deleted by sendToMon
+		}
+	}else{
+		rt_mutex_acquire(&mutex_robotMsgLost,TM_INFINITE);
+		robotMsgLost = 0;
+		rt_mutex_release(&mutex_robotMsgLost);
+	}
+	if (deleteIt){
+		delete(fromRobot);
+	}
+}
